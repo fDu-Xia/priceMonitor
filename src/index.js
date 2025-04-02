@@ -4,13 +4,36 @@ import InfraService from './services/infraService.js';
 import PancakeService from './services/pancakeService.js';
 import config from '../config.js';
 import {logInfo, logError, logPriceDeviation} from './utils/logger.js';
+import {Web3} from "web3";
+import FourMemeService from "./services/fourmemeService.js";
+import {
+    PANCAKE_ROUTER_ADDRESS,
+    PRICE_UNIT,
+    QUOTER_ROUTER_ADDRESS,
+    UNISWAP_QUOTER,
+    UNISWAP_ROUTER_ADDRESS
+} from "./utils/constants.js";
+import Decimal from "decimal.js";
+import BN from "bn.js";
 
 // 加载环境变量
 dotenv.config();
 
+// 初始化Web3提供者
+const initWeb3 = () => {
+    // 使用BSC节点
+    const provider = new Web3.providers.HttpProvider(config.pancakeswap.endpoint);
+    return new Web3(provider);
+};
+
+// 初始化Web3实例
+export const web3 = initWeb3();
+
 // 创建服务实例
 const infraService = new InfraService();
-const pancakeService = new PancakeService();
+const pancakeService = new PancakeService(PANCAKE_ROUTER_ADDRESS,QUOTER_ROUTER_ADDRESS);
+const uniswapService = new PancakeService(UNISWAP_ROUTER_ADDRESS,UNISWAP_QUOTER)
+const fourMemeService = new FourMemeService();
 
 /**
  * 运行价格比较
@@ -20,12 +43,45 @@ async function runBNBPriceComparison() {
         logInfo('开始运行基于BNB的价格比较...');
 
         // 获取所有配置的代币地址
-        const tokenAddresses = config.tokens.map(token => token.address);
+        const tokenAddresses = config.tokens.map(token => token);
+
+        const v2TokenAddresses = config.tokens
+            .filter(token => token.pool === 'pancakeV2')
+            .map(token => token);
+
+        const v3TokenAddresses = config.tokens
+            .filter(token => token.pool === 'pancakeV3')
+            .map(token => token);
+
+        const uniswapV3Addresses = config.tokens
+            .filter(token => token.pool === 'uniswapV3')
+            .map(token => token);
+
+        const fourMemeTokenAddresses = config.tokens
+            .filter(token => token.pool === 'fourMeme')
+            .map(token => token);
 
         // 从两个来源获取相对BNB的价格
-        const [infraPricesInBNB, pancakeswapPricesInBNB] = await Promise.all([
+        const [
+            infraPricesInBNB,
+            pancakeV2Prices,
+            pancakeV3Prices,
+            uniswapV3Prices,
+            fourMemePricesInBNB
+        ] = await Promise.all([
             infraService.getTokensPricesInBNB(tokenAddresses),
-            pancakeService.getTokensPricesInV2(tokenAddresses)
+            pancakeService.getTokensPricesInV2(v2TokenAddresses),
+            pancakeService.getTokensPricesInV3(v3TokenAddresses),
+            uniswapService.getTokensPricesInV3(uniswapV3Addresses),
+            fourMemeService.getTokensPrices(fourMemeTokenAddresses),
+        ]);
+
+        // 合并V2和V3的价格结果
+        const outSidePricesInBNB = new Map([
+            ...pancakeV2Prices,
+            ...pancakeV3Prices,
+            ...uniswapV3Prices,
+            ...fourMemePricesInBNB,
         ]);
 
         // 对比每个代币相对BNB的价格
@@ -40,12 +96,12 @@ async function runBNBPriceComparison() {
 
             // 获取两个来源的价格
             const infraPrice = infraPricesInBNB.get(address);
-            const pancakeswapPrice = pancakeswapPricesInBNB.get(address);
+            const outsidePrice = outSidePricesInBNB.get(address);
 
             // 如果两个来源都有价格数据，则进行比较
-            if (infraPrice && pancakeswapPrice) {
+            if (infraPrice && outsidePrice) {
                 // 两个价格都已经是BNB价格单位，可以直接比较
-                const result = compareBNBPrices(infraPrice, pancakeswapPrice);
+                const result = compareBNBPrices(infraPrice, outsidePrice,token.decimals);
                 comparisonResults.push(result);
 
                 // 输出详细的比较结果
@@ -64,12 +120,7 @@ async function runBNBPriceComparison() {
     }
 }
 
-function compareBNBPrices(infraPrice, pancakeswapPrice) {
-    // 确保两个价格都是BNB单位
-    if (infraPrice.priceUnit !== 'BNB' || pancakeswapPrice.priceUnit !== 'BNB') {
-        throw new Error('价格单位不匹配，无法比较');
-    }
-
+function compareBNBPrices(infraPrice, outsidePrice,tokenDecimals) {
     // 创建价格比较结果对象
     const result = {
         token: {
@@ -77,28 +128,32 @@ function compareBNBPrices(infraPrice, pancakeswapPrice) {
             symbol: infraPrice.symbol
         },
         infraPrice: infraPrice.price,
-        pancakeswapPrice: pancakeswapPrice.price,
+        pancakeswapPrice: outsidePrice.price,
         timestamp: Date.now(),
 
         // 计算偏差百分比
         deviationPercentage: null
     };
 
+    if (outsidePrice.priceUnit !== PRICE_UNIT.BNB){
+        result.infraPrice = new Decimal(new Decimal(10).pow(17).dividedBy(infraPrice.price).mul(new Decimal(10).pow(tokenDecimals)).toFixed(0))
+    }
+
     // 计算偏差百分比
-    if (pancakeswapPrice.price.isZero()) {
+    if (outsidePrice.price.isZero()) {
         result.deviationPercentage = null; // 避免除以零
     } else {
-        const diff = infraPrice.price.sub(pancakeswapPrice.price);
-        result.deviationPercentage = diff.dividedBy(pancakeswapPrice.price).times(100);
+        const diff = result.infraPrice.sub(outsidePrice.price);
+        result.deviationPercentage = diff.dividedBy(outsidePrice.price).times(100);
     }
 
     // 添加格式化方法
     result.getFormattedResult = function() {
         if (this.deviationPercentage === null) {
-            return `${this.token.symbol}: Infra价格 = ${this.infraPrice.toString()} BNB, PancakeSwap价格 = ${this.pancakeswapPrice.toString()} BNB, 偏差 = 无法计算`;
+            return `${this.token.symbol}: Infra价格 = ${this.infraPrice.toString()}, Outside价格 = ${this.pancakeswapPrice.toString()}, 偏差 = 无法计算`;
         }
 
-        return `${this.token.symbol}: Infra价格 = ${this.infraPrice.toString()} BNB, PancakeSwap价格 = ${this.pancakeswapPrice.toString()} BNB, 偏差 = ${this.deviationPercentage.toString()}%`;
+        return `${this.token.symbol}: Infra价格 = ${this.infraPrice.toString()}, Outside价格 = ${this.pancakeswapPrice.toString()}, 偏差 = ${this.deviationPercentage.toString()}%`;
     };
 
     // 检查偏差是否超过阈值
@@ -110,12 +165,12 @@ function compareBNBPrices(infraPrice, pancakeswapPrice) {
     // 记录价格偏差
     const isWarning = result.isAboveThreshold(config.monitoring.priceDeviationThreshold);
     logPriceDeviation(
+
         result.token.symbol,
         result.infraPrice,
         result.pancakeswapPrice,
         result.deviationPercentage,
         isWarning,
-        'BNB'
     );
 
     return result;

@@ -38,15 +38,7 @@ if (config.monitoring.logToFile) {
     }));
 }
 
-/**
- * 记录价格偏差
- * @param {string} tokenSymbol - 代币符号
- * @param {number} pinkpunkPrice - 基建价格
- * @param {number} pancakeswapPrice - PancakeSwap价格
- * @param {number} deviation - 偏差百分比
- * @param {boolean} isWarning - 是否达到警告阈值
- */
-export function logPriceDeviation(tokenSymbol, infraPrice, pancakeswapPrice, deviation, isWarning, priceUnit = 'USD') {
+export function logPriceDeviation(tokenSymbol, infraPrice, outsidePrice, deviation, isWarning) {
     // 格式化价格，处理Decimal和数字类型
     let infraPriceStr, pancakeswapPriceStr, deviationStr;
 
@@ -58,10 +50,10 @@ export function logPriceDeviation(tokenSymbol, infraPrice, pancakeswapPrice, dev
     }
 
     // 处理pancakeswapPrice
-    if (typeof pancakeswapPrice === 'object' && typeof pancakeswapPrice.toFixed === 'function') {
-        pancakeswapPriceStr = pancakeswapPrice.toFixed(8);
+    if (typeof outsidePrice === 'object' && typeof outsidePrice.toFixed === 'function') {
+        pancakeswapPriceStr = outsidePrice.toFixed(8);
     } else {
-        pancakeswapPriceStr = Number(pancakeswapPrice).toFixed(8);
+        pancakeswapPriceStr = Number(outsidePrice).toFixed(8);
     }
 
     // 处理deviation
@@ -74,8 +66,7 @@ export function logPriceDeviation(tokenSymbol, infraPrice, pancakeswapPrice, dev
     }
 
     // 构建消息
-    const unitSymbol = priceUnit === 'USD' ? '$' : '';
-    const message = `Token: ${tokenSymbol}, Infra: ${unitSymbol}${infraPriceStr} ${priceUnit}, PancakeSwap: ${unitSymbol}${pancakeswapPriceStr} ${priceUnit}, Deviation: ${deviationStr}`;
+    const message = `Token: ${tokenSymbol}, Infra: ${infraPriceStr}, PancakeSwap: ${pancakeswapPriceStr}, Deviation: ${deviationStr}`;
 
     if (isWarning) {
         logger.warn(`[WARNING] 价格偏差超过阈值! ${message}`);
@@ -100,9 +91,3 @@ export function logError(message, error) {
 export function logInfo(message) {
     logger.info(message);
 }
-
-export default {
-    logPriceDeviation,
-    logError,
-    logInfo
-};

@@ -20,9 +20,11 @@ export default class InfraService {
         try {
             logInfo(`从infra获取${tokenAddresses.length}个代币的价格`);
 
+            const addresses = tokenAddresses.map(token => token.address);
+
             const response = await axios.post(this.endpoint, {
                 chainId: this.chainId,
-                tokenAddresses: tokenAddresses
+                tokenAddresses: addresses
             }, {
                 headers: {
                     'Content-Type': 'application/json'
@@ -37,15 +39,15 @@ export default class InfraService {
 
             // 处理结果
             const pricesMap = new Map();
-            const tokensPrice = response.data.data.tokensPrice;
+            const tokensPrices = response.data.data.tokensPrice;
 
             // 获取BNB的USD价格
             let bnbPriceInUSD;
-            if (tokensPrice[constants.BNB_ADDRESS]) {
-                bnbPriceInUSD = new Decimal(tokensPrice[constants.BNB_ADDRESS]);
-            } else if (tokensPrice[constants.WBNB_ADDRESS]) {
+            if (tokensPrices[constants.BNB_ADDRESS]) {
+                bnbPriceInUSD = new Decimal(tokensPrices[constants.BNB_ADDRESS]);
+            } else if (tokensPrices[constants.WBNB_ADDRESS]) {
                 // 如果没有BNB但有WBNB，也可以使用WBNB的价格
-                bnbPriceInUSD = new Decimal(tokensPrice[constants.WBNB_ADDRESS]);
+                bnbPriceInUSD = new Decimal(tokensPrices[constants.WBNB_ADDRESS]);
             } else {
                 logError('获取并转换代币BNB价格失败:','获取BNB价格失败，无法计算代币的BNB价格');
             }
@@ -53,7 +55,7 @@ export default class InfraService {
             logInfo(`当前BNB价格: $${bnbPriceInUSD.toString()}`);
 
             // 遍历返回的价格数据，转换为BNB价格
-            Object.entries(tokensPrice).forEach(([address, usdPrice]) => {
+            Object.entries(tokensPrices).forEach(([address, usdPrice]) => {
                 // 查找代币符号信息
                 const tokenConfig = config.tokens.find(t =>
                     t.address.toLowerCase() === address.toLowerCase()
@@ -70,7 +72,7 @@ export default class InfraService {
                     } else {
                         // 计算公式: tokenPriceInBNB = tokenPriceInUSD / bnbPriceInUSD
                         const tmp = usdPriceDecimal.dividedBy(bnbPriceInUSD);
-                        tokenPriceInBNB = new Decimal(tmp.times(new Decimal('1e18')).toFixed(0))
+                        tokenPriceInBNB = new Decimal(tmp.times(1000000000000000000))
                     }
 
                     // 创建代币价格对象，现在价格是以BNB为单位
@@ -84,7 +86,7 @@ export default class InfraService {
 
                     pricesMap.set(address.toLowerCase(), tokenPrice);
 
-                    logInfo(`代币 ${tokenConfig.symbol} 的BNB价格: ${tokenPriceInBNB.toString()} BNB`);
+                    logInfo(`代币 ${tokenConfig.symbol} 的BNB价格: ${tokenPriceInBNB.toString()}`);
                 }
             });
 
